@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>メッセージングアプリ</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const { Send, UserPlus, LogOut, MessageCircle, User } = lucide;
+
+    // Firebase設定
+    const firebaseConfig = {
+      apiKey: "AIzaSyC7i8asCyObxzJo1N8jGS9SS5oNtG6jGps",
+      authDomain: "my-app.com",
+      databaseURL: "https://my-app.com",
+      projectId: "messaging-app",
+      storageBucket: "messaging-app",
+      messagingSenderId: "1078189685080",
+      appId: "jergauergnsejkrglusdhrkgjsnldrugeao58624u5069we",
+      measurementId: "G-N7MBFFT66Q"
+    };
+
+    // Firebaseを初期化
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const auth = firebase.auth();
+    const database = firebase.database();
+
+    function Icon({ icon: IconComponent, ...props }) {
+      return React.createElement(IconComponent, props);
+    }
+
+    function MessagingApp() {
+      const [user, setUser] = useState(null);
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [username, setUsername] = useState('');
+      const [isSignUp, setIsSignUp] = useState(false);
+      const [messages, setMessages] = useState([]);
+      const [inputText, setInputText] = useState('');
+      const [friends, setFriends] = useState([]);
+      const [selectedFriend, setSelectedFriend] = useState(null);
+      const [showAddFriend, setShowAddFriend] = useState(false);
+      const [searchName, setSearchName] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const messagesEndRef = useRef(null);
+
+      const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      };
+
+      useEffect(() => {
+        scrollToBottom();
+      }, [messages]);
+
+      useEffect(() => {
+        const unsubscribe = auth.onAuthStateChanged(async (user) => {
+          if (user) {
+            setUser(user);
+            const userRef = database.ref(`users/${user.uid}`);
+            const snapshot = await userRef.once('value');
+            if (snapshot.exists()) {
+              setUsername(snapshot.val().username);
+              loadFriends(user.uid);
+            }
+          } else {
+            setUser(null);
+            setUsername('');
+          }
+        });
+        return () => unsubscribe();
+      }, []);
+
+      const loadFriends = (uid) => {
+        const friendsRef = database.ref(`friends/${uid}`);
+        friendsRef.on('value', (snapshot) => {
+          if (snapshot.exists()) {
+            setFriends(Object.values(snapshot.val()));
+          } else {
+            setFriends([]);
+          }
+        });
+      };
+
+      useEffect(() => {
+        if (user && selectedFriend) {
+          const chatKey = [user.uid, selectedFriend.uid].sort().join('_');
+          const messagesRef = database.ref(`chats/${chatKey}/messages`);
+          
+          messagesRef.on('value', (snapshot) => {
+            if (snapshot.exists()) {
+              const msgs = Object.values(snapshot.val()).sort((a, b) => a.timestamp - b.timestamp);
+              setMessages(msgs);
+            } else {
+              setMessages([]);
+            }
+          });
+
+          return () => messagesRef.off();
+        }
+      }, [user, selectedFriend]);
+
+      const handleSignUp = async () => {
+        if (!email || !password || !username) {
+          setError('すべての項目を入力してください');
+          return;
+        }
+        setLoading(true);
+        setError('');
+        try {
+          const userCredential = await auth.createUserWithEmailAndPassword(email, password);
+          await database.ref(`users/${userCredential.user.uid}`).set({
+            username: username,
+            email: email,
+            createdAt: Date.now()
+          });
+          await database.ref(`usernames/${username}`).set({
+            uid: userCredential.user.uid,
+            username: username
+          });
+        } catch (err) {
+          setError(err.message);
+        }
+        setLoading(false);
+      };
+
+      const handleLogin = async () => {
+        if (!email || !password) {
+          setError('メールアドレスとパスワードを入力してください');
+          return;
+        }
+        setLoading(true);
+        setError('');
+        try {
+          await auth.signInWithEmailAndPassword(email, password);
+        } catch (err) {
+          setError('ログインに失敗しました: ' + err.message);
+        }
+        setLoading(false);
+      };
+
+      const handleLogout = async () => {
+        await auth.signOut();
+        setFriends([]);
+        setSelectedFriend(null);
+        setMessages([]);
+      };
+
+      const handleAddFriend = async () => {
+        if (!searchName.trim()) {
+          alert('ユーザー名を入力してください');
+          return;
+        }
+        if (searchName === username) {
+          alert('自分自身は追加できません');
+          return;
+        }
+
+        setLoading(true);
+        try {
+          const usernameRef = database.ref(`usernames/${searchName}`);
+          const snapshot = await usernameRef.once('value');
+          
+          if (!snapshot.exists()) {
+            alert('このユーザーは存在しません');
+            setLoading(false);
+            return;
+          }
+
+          const friendData = snapshot.val();
+          
+          const existingFriends = friends.filter(f => f.uid === friendData.uid);
+          if (existingFriends.length > 0) {
+            alert('すでに友達です');
+            setLoading(false);
+            return;
+          }
+
+          const friendsRef = database.ref(`friends/${user.uid}`);
+          await friendsRef.push({
+            uid: friendData.uid,
+            username: friendData.username,
+            addedAt: Date.now()
+          });
+
+          setSearchName('');
+          setShowAddFriend(false);
+          alert(`${searchName}を友達に追加しました！`);
+        } catch (err) {
+          console.error('友達追加エラー:', err);
+          alert('友達の追加に失敗しました');
+        }
+        setLoading(false);
+      };
+
+      const handleSend = async () => {
+        if (!inputText.trim() || !selectedFriend) return;
+
+        const chatKey = [user.uid, selectedFriend.uid].sort().join('_');
+        const messagesRef = database.ref(`chats/${chatKey}/messages`);
+        
+        await messagesRef.push({
+          text: inputText,
+          sender: user.uid,
+          senderName: username,
+          timestamp: Date.now(),
+          time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+        });
+
+        setInputText('');
+      };
+
+      const handleKeyPress = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          handleSend();
+        }
+      };
+
+      if (!user) {
+        return (
+          <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-green-400 to-blue-500 p-4">
+            <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-md">
+              <div className="text-center mb-6">
+                <div className="w-20 h-20 bg-green-500 rounded-full mx-auto mb-4 flex items-center justify-center text-white text-3xl font-bold">
+                  💬
+                </div>
+                <h1 className="text-3xl font-bold text-gray-800">メッセージング</h1>
+                <p className="text-gray-600 mt-2">
+                  {isSignUp ? 'アカウントを作成' : 'ログイン'}
+                </p>
+              </div>
+
+              {error && (
+                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                  {error}
+                </div>
+              )}
+
+              {isSignUp && (
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="ユーザー名"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3 focus:outline-none focus:border-green-500"
+                />
+              )}
+              
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="メールアドレス"
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3 focus:outline-none focus:border-green-500"
+              />
+              
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && (isSignUp ? handleSignUp() : handleLogin())}
+                placeholder="パスワード"
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4 focus:outline-none focus:border-green-500"
+              />
+              
+              <button
+                onClick={isSignUp ? handleSignUp : handleLogin}
+                disabled={loading}
+                className="w-full bg-green-500 text-white rounded-lg py-3 font-semibold hover:bg-green-600 transition-colors disabled:bg-gray-300 mb-3"
+              >
+                {loading ? '処理中...' : (isSignUp ? 'アカウント作成' : 'ログイン')}
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  setError('');
+                }}
+                className="w-full text-green-600 hover:text-green-700 text-sm"
+              >
+                {isSignUp ? 'すでにアカウントをお持ちですか？ログイン' : 'アカウントを作成'}
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="flex h-screen bg-gray-100">
+          <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
+            <div className="p-4 bg-green-500 text-white">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center">
+                  <div className="w-10 h-10 rounded-full bg-white bg-opacity-30 flex items-center justify-center mr-3">
+                    <Icon icon={User} size={20} />
+                  </div>
+                  <div>
+                    <h1 className="text-lg font-bold">{username}</h1>
+                    <p className="text-xs opacity-90">{email}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="p-2 hover:bg-green-600 rounded-full transition-colors"
+                  title="ログアウト"
+                >
+                  <Icon icon={LogOut} size={20} />
+                </button>
+              </div>
+              <button
+                onClick={() => setShowAddFriend(true)}
+                className="w-full bg-white text-green-600 py-2 px-4 rounded-lg font-semibold hover:bg-green-50 transition-colors flex items-center justify-center"
+              >
+                <Icon icon={UserPlus} size={18} className="mr-2" />
+                友達を追加
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {friends.length === 0 ? (
+                <div className="p-8 text-center text-gray-500">
+                  <Icon icon={MessageCircle} size={48} className="mx-auto mb-4 opacity-50" />
+                  <p>友達がいません</p>
+                  <p className="text-sm mt-2">上のボタンから<br />友達を追加しましょう</p>
+                </div>
+              ) : (
+                friends.map((friend, index) => (
+                  <div
+                    key={index}
+                    onClick={() => setSelectedFriend(friend)}
+                    className={`p-4 border-b border-gray-200 cursor-pointer hover:bg-gray-50 ${
+                      selectedFriend?.uid === friend.uid ? 'bg-gray-100' : ''
+                    }`}
+                  >
+                    <div className="flex items-center">
+                      <div className="w-12 h-12 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-lg">
+                        {friend.username.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="ml-3">
+                        <h3 className="font-semibold text-gray-800">{friend.username}</h3>
+                        <p className="text-sm text-gray-500">タップしてチャット</p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="flex-1 flex flex-col">
+            {selectedFriend ? (
+              <>
+                <div className="bg-white border-b border-gray-200 p-4 flex items-center justify-between">
+                  <div className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
+                      {selectedFriend.username.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="ml-3">
+                      <h2 className="font-semibold text-gray-800">{selectedFriend.username}</h2>
+                      <p className="text-xs text-green-500">友達</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+                  {messages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center text-gray-500">
+                        <Icon icon={MessageCircle} size={48} className="mx-auto mb-4 opacity-50" />
+                        <p>メッセージがありません</p>
+                        <p className="text-sm mt-2">最初のメッセージを送信しましょう！</p>
+                      </div>
+                    </div>
+                  ) : (
+                    messages.map((message) => {
+                      const isMe = message.sender === user.uid;
+                      return (
+                        <div
+                          key={message.timestamp}
+                          className={`flex mb-4 ${isMe ? 'justify-end' : 'justify-start'}`}
+                        >
+                          {!isMe && (
+                            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-sm font-bold mr-2 flex-shrink-0">
+                              {selectedFriend.username.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="max-w-xs lg:max-w-md">
+                            <div
+                              className={`rounded-2xl px-4 py-2 ${
+                                isMe ? 'bg-green-500 text-white' : 'bg-white text-gray-800'
+                              }`}
+                            >
+                              <p className="break-words">{message.text}</p>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1 px-2">{message.time}</p>
+                          </div>
+                          {isMe && (
+                            <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-white text-sm font-bold ml-2 flex-shrink-0">
+                              {username.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                <div className="bg-white border-t border-gray-200 p-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      onKeyPress={handleKeyPress}
+                      placeholder="メッセージを入力..."
+                      className="flex-1 border border-gray-300 rounded-full px-4 py-3 focus:outline-none focus:border-green-500"
+                    />
+                    <button
+                      onClick={handleSend}
+                      disabled={!inputText.trim()}
+                      className="bg-green-500 text-white rounded-full p-3 hover:bg-green-600 transition-colors disabled:bg-gray-300"
+                    >
+                      <Icon icon={Send} size={20} />
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center bg-gray-50">
+                <div className="text-center text-gray-500">
+                  <Icon icon={MessageCircle} size={64} className="mx-auto mb-4 opacity-30" />
+                  <p className="text-lg">友達を選択してチャットを開始</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {showAddFriend && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 w-96">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">友達を追加</h2>
+                <input
+                  type="text"
+                  value={searchName}
+                  onChange={(e) => setSearchName(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleAddFriend()}
+                  placeholder="ユーザー名を入力"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4 focus:outline-none focus:border-green-500"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleAddFriend}
+                    disabled={loading || !searchName.trim()}
+                    className="flex-1 bg-green-500 text-white rounded-lg py-3 font-semibold hover:bg-green-600 transition-colors disabled:bg-gray-300"
+                  >
+                    {loading ? '検索中...' : '追加'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAddFriend(false);
+                      setSearchName('');
+                    }}
+                    className="flex-1 bg-gray-200 text-gray-700 rounded-lg py-3 font-semibold hover:bg-gray-300 transition-colors"
+                  >
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<MessagingApp />);
+  </script>
+</body>
+</html>
